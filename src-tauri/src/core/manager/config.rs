@@ -1,13 +1,12 @@
 use super::CoreManager;
 use crate::{
-    config::{Config, ConfigType},
+    config::{Config, ConfigType, runtime::IRuntime},
     constants::timing,
     core::{handle, validate::CoreConfigValidator},
     utils::{dirs, help},
 };
 use anyhow::{Result, anyhow};
 use clash_verge_logging::{Type, logging};
-use clash_verge_types::runtime::IRuntime;
 use smartstring::alias::String;
 use std::{collections::HashSet, path::PathBuf, time::Instant};
 use tauri_plugin_mihomo::Error as MihomoError;
@@ -60,7 +59,10 @@ impl CoreManager {
 
     async fn perform_config_update(&self) -> Result<(bool, String)> {
         Config::generate().await?;
+        self.apply_generate_config().await
+    }
 
+    pub async fn apply_generate_config(&self) -> Result<(bool, String)> {
         match CoreConfigValidator::global().validate_config().await {
             Ok((true, _)) => {
                 let run_path = Config::generate_file(ConfigType::Run).await?;
@@ -87,16 +89,28 @@ impl CoreManager {
                 Ok(())
             }
             Err(err) => {
-                Config::runtime().await.discard();
-                Err(anyhow!("Failed to apply config: {}", err))
+                logging!(
+                    warn,
+                    Type::Core,
+                    "Failed to apply configuration by mihomo api, restart core to apply it, error msg: {err}"
+                );
+                match self.restart_core().await {
+                    Ok(_) => {
+                        Config::runtime().await.apply();
+                        logging!(info, Type::Core, "Configuration applied after restart");
+                        Ok(())
+                    }
+                    Err(err) => {
+                        logging!(error, Type::Core, "Failed to restart core: {}", err);
+                        Config::runtime().await.discard();
+                        Err(anyhow!("Failed to apply config: {}", err))
+                    }
+                }
             }
         }
     }
 
     async fn reload_config(&self, path: &str) -> Result<(), MihomoError> {
-        handle::Handle::mihomo()
-            .await
-            .reload_config(true, path)
-            .await
+        handle::Handle::mihomo().await.reload_config(true, path).await
     }
 }

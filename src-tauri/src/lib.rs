@@ -10,10 +10,7 @@ mod feat;
 mod module;
 mod process;
 pub mod utils;
-#[cfg(target_os = "linux")]
-use crate::utils::linux;
-use crate::utils::resolve::init_signal;
-use crate::{constants::files, utils::resolve::prioritize_initialization};
+use crate::constants::files;
 use crate::{
     core::handle,
     process::AsyncHandler,
@@ -22,15 +19,11 @@ use crate::{
 use anyhow::Result;
 use clash_verge_logging::{Type, logging};
 use once_cell::sync::OnceCell;
-use rust_i18n::i18n;
-use std::time::Duration;
 use tauri::{AppHandle, Manager as _};
 #[cfg(target_os = "macos")]
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_deep_link::DeepLinkExt as _;
 use tauri_plugin_mihomo::RejectPolicy;
-
-i18n!("locales", fallback = "zh");
 
 pub static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
 /// Application initialization helper functions
@@ -67,11 +60,11 @@ mod app_init {
                     .socket_path(crate::config::IClashTemp::guard_external_controller_ipc())
                     .pool_config(
                         tauri_plugin_mihomo::IpcPoolConfigBuilder::new()
-                            .min_connections(1)
+                            .min_connections(3)
                             .max_connections(32)
                             .idle_timeout(std::time::Duration::from_secs(60))
                             .health_check_interval(std::time::Duration::from_secs(60))
-                            .reject_policy(RejectPolicy::Timeout(Duration::from_secs(3)))
+                            .reject_policy(RejectPolicy::Wait)
                             .build(),
                     )
                     .build(),
@@ -134,13 +127,13 @@ mod app_init {
         Ok(())
     }
 
-    pub fn generate_handlers()
-    -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
+    pub fn generate_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
         tauri::generate_handler![
             tauri_plugin_clash_verge_sysinfo::commands::get_system_info,
             tauri_plugin_clash_verge_sysinfo::commands::get_app_uptime,
             tauri_plugin_clash_verge_sysinfo::commands::app_is_admin,
             tauri_plugin_clash_verge_sysinfo::commands::export_diagnostic_info,
+            cmd::is_port_in_use,
             cmd::get_sys_proxy,
             cmd::get_auto_proxy,
             cmd::open_app_dir,
@@ -156,8 +149,6 @@ mod app_init {
             cmd::start_core,
             cmd::stop_core,
             cmd::restart_core,
-            cmd::notify_ui_ready,
-            cmd::update_ui_stage,
             cmd::get_running_mode,
             cmd::get_auto_launch_status,
             cmd::entry_lightweight_mode,
@@ -214,6 +205,7 @@ mod app_init {
             cmd::list_local_backup,
             cmd::delete_local_backup,
             cmd::restore_local_backup,
+            cmd::import_local_backup,
             cmd::export_local_backup,
             cmd::create_webdav_backup,
             cmd::save_webdav_config,
@@ -231,10 +223,10 @@ pub fn run() {
         return;
     }
 
-    let _ = utils::dirs::init_portable_flag();
-
     #[cfg(target_os = "linux")]
-    linux::configure_environment();
+    utils::linux::workarounds::apply_nvidia_dmabuf_renderer_workaround();
+
+    let _ = utils::dirs::init_portable_flag();
 
     let builder = app_init::setup_plugins(tauri::Builder::default())
         .setup(|app| {
@@ -243,7 +235,7 @@ pub fn run() {
                 .set(app.app_handle().clone())
                 .expect("failed to set global app handle");
 
-            let _handle = AsyncHandler::block_on(async { prioritize_initialization().await });
+            resolve::init_work_dir_and_logger()?;
 
             logging!(info, Type::Setup, "开始应用初始化...");
             if let Err(e) = app_init::setup_autostart(app) {
@@ -256,11 +248,9 @@ pub fn run() {
                 logging!(error, Type::Setup, "Failed to setup window state: {}", e);
             }
 
-            resolve::resolve_setup_handle();
             resolve::resolve_setup_async();
             resolve::resolve_setup_sync();
-            init_signal();
-            resolve::resolve_done();
+            resolve::init_signal();
 
             logging!(info, Type::Setup, "初始化已启动");
             Ok(())
@@ -270,7 +260,6 @@ pub fn run() {
     mod event_handlers {
         #[cfg(target_os = "macos")]
         use crate::module::lightweight;
-        #[cfg(target_os = "macos")]
         use crate::utils::window_manager::WindowManager;
         use crate::{
             config::Config,
@@ -289,7 +278,6 @@ pub fn run() {
             }
 
             logging!(info, Type::System, "应用就绪");
-            handle::Handle::global().init();
 
             #[cfg(target_os = "macos")]
             if let Some(window) = _app_handle.get_webview_window("main") {
@@ -299,8 +287,6 @@ pub fn run() {
 
         #[cfg(target_os = "macos")]
         pub async fn handle_reopen(has_visible_windows: bool) {
-            handle::Handle::global().init();
-
             if lightweight::is_in_lightweight_mode() {
                 lightweight::exit_lightweight_mode().await;
                 return;
@@ -322,7 +308,7 @@ pub fn run() {
 
             if let tauri::WindowEvent::CloseRequested { api, .. } = api {
                 api.prevent_close();
-                if let Some(window) = core::handle::Handle::get_window() {
+                if let Some(window) = WindowManager::get_main_window() {
                     let _ = window.hide();
                 }
             }
@@ -330,11 +316,7 @@ pub fn run() {
 
         pub fn handle_window_focus(focused: bool) {
             AsyncHandler::spawn(move || async move {
-                let is_enable_global_hotkey = Config::verge()
-                    .await
-                    .data_arc()
-                    .enable_global_hotkey
-                    .unwrap_or(true);
+                let is_enable_global_hotkey = Config::verge().await.data_arc().enable_global_hotkey.unwrap_or(true);
 
                 if focused {
                     #[cfg(target_os = "macos")]
@@ -347,7 +329,9 @@ pub fn run() {
                             .register_system_hotkey(SystemHotkey::CmdW)
                             .await;
                     }
-                    let _ = hotkey::Hotkey::global().init(true).await;
+                    if !is_enable_global_hotkey {
+                        let _ = hotkey::Hotkey::global().init(false).await;
+                    }
                     return;
                 }
 
@@ -370,11 +354,7 @@ pub fn run() {
             AsyncHandler::spawn(move || async move {
                 let _ = hotkey::Hotkey::global().unregister_system_hotkey(SystemHotkey::CmdQ);
                 let _ = hotkey::Hotkey::global().unregister_system_hotkey(SystemHotkey::CmdW);
-                let is_enable_global_hotkey = Config::verge()
-                    .await
-                    .data_arc()
-                    .enable_global_hotkey
-                    .unwrap_or(true);
+                let is_enable_global_hotkey = Config::verge().await.data_arc().enable_global_hotkey.unwrap_or(true);
                 if !is_enable_global_hotkey {
                     let _ = hotkey::Hotkey::global().reset();
                 }
@@ -386,27 +366,15 @@ pub fn run() {
     let context = tauri::test::mock_context(tauri::test::noop_assets());
     #[cfg(feature = "clippy")]
     let app = builder.build(context).unwrap_or_else(|e| {
-        logging!(
-            error,
-            Type::Setup,
-            "Failed to build Tauri application: {}",
-            e
-        );
+        logging!(error, Type::Setup, "Failed to build Tauri application: {}", e);
         std::process::exit(1);
     });
 
     #[cfg(not(feature = "clippy"))]
-    let app = builder
-        .build(tauri::generate_context!())
-        .unwrap_or_else(|e| {
-            logging!(
-                error,
-                Type::Setup,
-                "Failed to build Tauri application: {}",
-                e
-            );
-            std::process::exit(1);
-        });
+    let app = builder.build(tauri::generate_context!()).unwrap_or_else(|e| {
+        logging!(error, Type::Setup, "Failed to build Tauri application: {}", e);
+        std::process::exit(1);
+    });
 
     app.run(|app_handle, e| match e {
         tauri::RunEvent::Ready | tauri::RunEvent::Resumed => {
@@ -417,8 +385,7 @@ pub fn run() {
         }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen {
-            has_visible_windows,
-            ..
+            has_visible_windows, ..
         } => {
             if core::handle::Handle::global().is_exiting() {
                 return;
@@ -427,23 +394,19 @@ pub fn run() {
                 event_handlers::handle_reopen(has_visible_windows).await;
             });
         }
-        #[cfg(target_os = "macos")]
         tauri::RunEvent::Exit => AsyncHandler::block_on(async {
             if !handle::Handle::global().is_exiting() {
                 feat::quit().await;
             }
         }),
         tauri::RunEvent::ExitRequested { api, code, .. } => {
-            AsyncHandler::block_on(async {
-                let _ = handle::Handle::mihomo()
-                    .await
-                    .clear_all_ws_connections()
-                    .await;
-            });
-
             if core::handle::Handle::global().is_exiting() {
                 return;
             }
+
+            AsyncHandler::block_on(async {
+                let _ = handle::Handle::mihomo().await.clear_all_ws_connections().await;
+            });
 
             if code.is_none() {
                 api.prevent_exit();

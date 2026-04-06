@@ -4,6 +4,7 @@ use clash_verge_logging::{Type, logging};
 use gethostname::gethostname;
 use network_interface::NetworkInterface;
 use serde_yaml_ng::Mapping;
+use std::net::TcpListener;
 use sysproxy::{Autoproxy, Sysproxy};
 use tauri_plugin_clash_verge_sysinfo;
 
@@ -40,10 +41,7 @@ pub async fn get_sys_proxy() -> CmdResult<Mapping> {
 #[tauri::command]
 pub async fn get_auto_proxy() -> CmdResult<Mapping> {
     let auto_proxy = Autoproxy::get_auto_proxy().stringify_err()?;
-    let Autoproxy {
-        ref enable,
-        ref url,
-    } = auto_proxy;
+    let Autoproxy { ref enable, ref url } = auto_proxy;
 
     let mut map = Mapping::new();
     map.insert("enable".into(), (*enable).into());
@@ -97,4 +95,9 @@ pub fn get_network_interfaces_info() -> CmdResult<Vec<NetworkInterface>> {
     }
 
     Ok(result)
+}
+
+#[tauri::command]
+pub fn is_port_in_use(port: u16) -> bool {
+    TcpListener::bind(("127.0.0.1", port)).is_err()
 }

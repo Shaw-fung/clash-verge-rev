@@ -16,7 +16,8 @@
   <a href="./README_es.md">Español</a> ·
   <a href="./README_ru.md">Русский</a> ·
   <a href="./README_ja.md">日本語</a> ·
-  <a href="./README_ko.md">한국어</a>
+  <a href="./README_ko.md">한국어</a> ·
+  <a href="./README_fa.md">فارسی</a>
 </p>
 
 ## プレビュー
@@ -61,19 +62,6 @@ Windows (x64/x86)、Linux (x64/arm64)、macOS 10.15+ (Intel/Apple) をサポー�
 - 世界初の `Hysteria2` プロトコル対応。Clash Verge クライアントとの相性抜群
 - ストリーミングおよび ChatGPT の利用にも対応
 - 公式サイト: [https://狗狗加速.com](https://verge.dginv.click/#/register?code=oaxsAGo6)
-
-#### ビルド環境スポンサー — [YXVM 専用サーバー](https://yxvm.com/aff.php?aff=827)
-
-本プロジェクトのビルドとリリースは、YXVM の専用サーバーによって支えられています。高速ダウンロードや快適な操作性は、強力なハードウェアがあってこそです。
-
-🧩 YXVM 専用サーバーの特長:
-
-- 🌎 最適化されたグローバル回線で圧倒的なダウンロード速度
-- 🔧 VPS とは異なるベアメタル資源で最高性能を発揮
-- 🧠 プロキシ運用、Web/CDN ホスティング、CI/CD など高負荷ワークロードに最適
-- 💡 複数データセンターから即時利用可能。CN2 や IEPL も選択可
-- 📦 本プロジェクトが使用している構成も販売中。同じ環境を入手できます
-- 🎯 同じビルド体験をしたい方は [今すぐ YXVM サーバーを注文](https://yxvm.com/aff.php?aff=827)
 
 ## 機能
 

@@ -2,9 +2,12 @@
 # Changelog.md
 # CONTRIBUTING.md
 
+.changelog_backups
 pnpm-lock.yaml
 
 src-tauri/target/
 src-tauri/gen/
 
 target
+Cargo.lock
+.github/workflows/*.lock.yml

@@ -11,11 +11,11 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Check frontend changes
         id: check_frontend
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         with:
           filters: |
             frontend:
@@ -40,19 +40,19 @@ jobs:
 
       - name: Install pnpm
         if: steps.check_frontend.outputs.frontend == 'true'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           run_install: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         if: steps.check_frontend.outputs.frontend == 'true'
         with:
-          node-version: "22"
-          cache: "pnpm"
+          node-version: '24.14.1'
+          cache: 'pnpm'
 
       - name: Restore pnpm cache
         if: steps.check_frontend.outputs.frontend == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.pnpm-store
           key: "pnpm-shared-stable-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}"

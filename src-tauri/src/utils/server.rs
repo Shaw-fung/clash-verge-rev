@@ -1,5 +1,6 @@
 use super::resolve;
 use crate::{
+    cmd::is_port_in_use,
     config::{Config, DEFAULT_PAC, IVerge},
     module::lightweight,
     process::AsyncHandler,
@@ -9,7 +10,6 @@ use anyhow::{Result, bail};
 use clash_verge_logging::{Type, logging, logging_error};
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
-use port_scanner::local_port_available;
 use reqwest::ClientBuilder;
 use smartstring::alias::String;
 use std::time::Duration;
@@ -27,10 +27,8 @@ static SHUTDOWN_SENDER: OnceCell<Mutex<Option<oneshot::Sender<()>>>> = OnceCell:
 /// check whether there is already exists
 pub async fn check_singleton() -> Result<()> {
     let port = IVerge::get_singleton_port();
-    if !local_port_available(port) {
-        let client = ClientBuilder::new()
-            .timeout(Duration::from_millis(500))
-            .build()?;
+    if is_port_in_use(port) {
+        let client = ClientBuilder::new().timeout(Duration::from_millis(500)).build()?;
         // 需要确保 Send
         #[allow(clippy::needless_collect)]
         let argvs: Vec<std::string::String> = std::env::args().collect();
@@ -40,9 +38,7 @@ pub async fn check_singleton() -> Result<()> {
                 let param = argvs[1].as_str();
                 if param.starts_with("clash:") {
                     client
-                        .get(format!(
-                            "http://127.0.0.1:{port}/commands/scheme?param={param}"
-                        ))
+                        .get(format!("http://127.0.0.1:{port}/commands/scheme?param={param}"))
                         .send()
                         .await?;
                 }
@@ -53,11 +49,7 @@ pub async fn check_singleton() -> Result<()> {
                 .send()
                 .await?;
         }
-        logging!(
-            error,
-            Type::Window,
-            "failed to setup singleton listen server"
-        );
+        logging!(error, Type::Window, "failed to setup singleton listen server");
         bail!("app exists");
     }
     Ok(())

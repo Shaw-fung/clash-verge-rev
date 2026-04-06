@@ -34,7 +34,6 @@ pub enum AutoBackupTrigger {
     Scheduled,
     GlobalMerge,
     GlobalScript,
-    ProfileChange,
 }
 
 impl AutoBackupTrigger {
@@ -43,7 +42,6 @@ impl AutoBackupTrigger {
             Self::Scheduled => "scheduled",
             Self::GlobalMerge => "merge",
             Self::GlobalScript => "script",
-            Self::ProfileChange => "profile",
         }
     }
 
@@ -214,27 +212,14 @@ impl AutoBackupManager {
             return Ok(());
         }
 
-        let file_name =
-            create_local_backup_with_namer(|name| append_auto_suffix(name, trigger.slug()).into())
-                .await?;
-        self.last_backup
-            .store(Local::now().timestamp(), Ordering::Release);
+        let file_name = create_local_backup_with_namer(|name| append_auto_suffix(name, trigger.slug()).into()).await?;
+        self.last_backup.store(Local::now().timestamp(), Ordering::Release);
 
         if let Err(err) = cleanup_auto_backups().await {
-            logging!(
-                warn,
-                Type::Backup,
-                "Failed to cleanup old auto backups: {err:#?}"
-            );
+            logging!(warn, Type::Backup, "Failed to cleanup old auto backups: {err:#?}");
         }
 
-        logging!(
-            info,
-            Type::Backup,
-            "Auto backup created ({:?}): {}",
-            trigger,
-            file_name
-        );
+        logging!(info, Type::Backup, "Auto backup created ({:?}): {}", trigger, file_name);
         Ok(())
     }
 
@@ -273,11 +258,7 @@ async fn cleanup_auto_backups() -> Result<()> {
     let mut entries = match fs::read_dir(&backup_dir).await {
         Ok(dir) => dir,
         Err(err) => {
-            logging!(
-                warn,
-                Type::Backup,
-                "Failed to read backup directory: {err:#?}"
-            );
+            logging!(warn, Type::Backup, "Failed to read backup directory: {err:#?}");
             return Ok(());
         }
     };

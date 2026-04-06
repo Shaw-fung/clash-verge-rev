@@ -1,64 +1,66 @@
-const envVarValue = (import.meta.env.VITE_ENABLE_DEBUG_LOGS ?? "").toString();
+/**
+ * Debug logging is enabled when:
+ * - dev build (`import.meta.env.DEV`)
+ * - env flag `VITE_ENABLE_DEBUG_LOGS` is truthy (1/true/yes)
+ * - page sets `window.__VERGE_ENABLE_DEBUG_LOGS__ = true`
+ * - localStorage item `VERGE_DEBUG_LOGS` is truthy (1/true/yes)
+ * Use `setDebugLoggingEnabled` to force-enable/disable at runtime.
+ */
+let runtimeOverride: boolean | undefined
+let cachedDebugEnabled: boolean | undefined
 
-let runtimeOverride: boolean | null = null;
+const parseStringFlag = (value: unknown) => {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase()
+  if (!normalized) return false
+  return normalized === '1' || normalized === 'true' || normalized === 'yes'
+}
 
-const parseStringFlag = (value: string) => {
-  if (!value) return false;
-  const normalized = value.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-};
+const readGlobalFlag = (): boolean | null => {
+  if (typeof window === 'undefined') return null
+  const flag = (window as any).__VERGE_ENABLE_DEBUG_LOGS__
+  return typeof flag === 'boolean' ? flag : null
+}
 
-let cachedDebugEnabled: boolean | null = null;
-
-const computeDebugEnabled = () => {
-  if (import.meta.env.DEV) {
-    return true;
+const readStoredFlag = (): boolean | null => {
+  if (typeof window === 'undefined') return null
+  try {
+    const stored = window.localStorage?.getItem('VERGE_DEBUG_LOGS')
+    return stored ? parseStringFlag(stored) : null
+  } catch {
+    return null
   }
+}
 
-  if (parseStringFlag(envVarValue)) {
-    return true;
-  }
+const computeDebugEnabled = (): boolean => {
+  if (import.meta.env.DEV) return true
+  if (parseStringFlag(import.meta.env.VITE_ENABLE_DEBUG_LOGS)) return true
 
-  if (typeof window !== "undefined") {
-    const globalFlag = (window as any).__VERGE_ENABLE_DEBUG_LOGS__;
-    if (typeof globalFlag === "boolean") {
-      return globalFlag;
-    }
+  const globalFlag = readGlobalFlag()
+  if (globalFlag !== null) return globalFlag
 
-    try {
-      const stored = window.localStorage?.getItem("VERGE_DEBUG_LOGS");
-      if (stored) {
-        return parseStringFlag(stored);
-      }
-    } catch {
-      // ignore storage access errors
-    }
-  }
+  const storedFlag = readStoredFlag()
+  if (storedFlag !== null) return storedFlag
 
-  return false;
-};
-
-const isEnvDebugEnabled = () => {
-  if (runtimeOverride !== null) {
-    return runtimeOverride;
-  }
-
-  if (cachedDebugEnabled !== null) {
-    return cachedDebugEnabled;
-  }
-
-  cachedDebugEnabled = computeDebugEnabled();
-  return cachedDebugEnabled;
-};
+  return false
+}
 
 export const setDebugLoggingEnabled = (enabled: boolean) => {
-  runtimeOverride = enabled;
-  cachedDebugEnabled = enabled;
-};
+  runtimeOverride = enabled
+  cachedDebugEnabled = enabled
+}
 
-export const isDebugLoggingEnabled = () => isEnvDebugEnabled();
+export const isDebugLoggingEnabled = () =>
+  runtimeOverride ??
+  cachedDebugEnabled ??
+  (cachedDebugEnabled = computeDebugEnabled())
 
+/**
+ * Logs to the console only when debug logging is enabled.
+ * Forwards all arguments to `console.log`; does nothing otherwise.
+ */
 export const debugLog = (...args: any[]) => {
-  if (!isEnvDebugEnabled()) return;
-  console.log(...args);
-};
+  if (!isDebugLoggingEnabled()) return
+  console.log(...args)
+}

@@ -12,6 +12,9 @@ use serde_yaml_ng::Mapping;
 use smartstring::alias::String;
 use std::time::Duration;
 use tokio::fs;
+// TODO, use other re-export
+use reqwest_dav::re_exports::url::form_urlencoded;
+use tauri::Url;
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct PrfItem {
@@ -129,9 +132,8 @@ impl PrfOption {
                 result.user_agent = b_ref.user_agent.clone().or(result.user_agent);
                 result.with_proxy = b_ref.with_proxy.or(result.with_proxy);
                 result.self_proxy = b_ref.self_proxy.or(result.self_proxy);
-                result.danger_accept_invalid_certs = b_ref
-                    .danger_accept_invalid_certs
-                    .or(result.danger_accept_invalid_certs);
+                result.danger_accept_invalid_certs =
+                    b_ref.danger_accept_invalid_certs.or(result.danger_accept_invalid_certs);
                 result.allow_auto_update = b_ref.allow_auto_update.or(result.allow_auto_update);
                 result.update_interval = b_ref.update_interval.or(result.update_interval);
                 result.merge = b_ref.merge.clone().or(result.merge);
@@ -259,8 +261,7 @@ impl PrfItem {
     ) -> Result<Self> {
         let with_proxy = option.is_some_and(|o| o.with_proxy.unwrap_or(false));
         let self_proxy = option.is_some_and(|o| o.self_proxy.unwrap_or(false));
-        let accept_invalid_certs =
-            option.is_some_and(|o| o.danger_accept_invalid_certs.unwrap_or(false));
+        let accept_invalid_certs = option.is_some_and(|o| o.danger_accept_invalid_certs.unwrap_or(false));
         let allow_auto_update = option.map(|o| o.allow_auto_update.unwrap_or(true));
         let user_agent = option.and_then(|o| o.user_agent.clone());
         let update_interval = option.and_then(|o| o.update_interval);
@@ -280,10 +281,12 @@ impl PrfItem {
             ProxyType::None
         };
 
+        let url = fix_dirty_url(url)?;
+
         // 使用网络管理器发送请求
         let resp = match NetworkManager::new()
             .get_with_interrupt(
-                url,
+                url.as_str(),
                 proxy_type,
                 Some(timeout),
                 user_agent.clone(),
@@ -348,10 +351,9 @@ impl PrfItem {
                     },
                 }
             }
-            None => Some(
-                crate::utils::help::get_last_part_and_decode(url)
-                    .unwrap_or_else(|| "Remote File".into()),
-            ),
+            None => {
+                Some(crate::utils::help::get_last_part_and_decode(url.as_str()).unwrap_or_else(|| "Remote File".into()))
+            }
         };
         let update_interval = match update_interval {
             Some(val) => Some(val),
@@ -374,19 +376,16 @@ impl PrfItem {
 
         let uid = help::get_uid("R").into();
         let file = format!("{uid}.yaml").into();
-        let name = name.map(|s| s.to_owned()).unwrap_or_else(|| {
-            filename
-                .map(|s| s.into())
-                .unwrap_or_else(|| "Remote File".into())
-        });
+        let name = name
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| filename.map(|s| s.into()).unwrap_or_else(|| "Remote File".into()));
         let data = resp.text_with_charset()?;
 
         // process the charset "UTF-8 with BOM"
         let data = data.trim_start_matches('\u{feff}');
 
         // check the data whether the valid yaml format
-        let yaml = serde_yaml_ng::from_str::<Mapping>(data)
-            .context("the remote profile data is invalid yaml")?;
+        let yaml = serde_yaml_ng::from_str::<Mapping>(data).context("the remote profile data is invalid yaml")?;
 
         if !yaml.contains_key("proxies") && !yaml.contains_key("proxy-providers") {
             bail!("profile does not contain `proxies` or `proxy-providers`");
@@ -424,7 +423,7 @@ impl PrfItem {
             name: Some(name),
             desc: desc.cloned(),
             file: Some(file),
-            url: Some(url.into()),
+            url: Some(url.as_str().into()),
             selected: None,
             extra,
             option: Some(PrfOption {
@@ -534,9 +533,7 @@ impl PrfItem {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("could not find the file"))?;
         let path = dirs::app_profiles_dir()?.join(file.as_str());
-        let content = fs::read_to_string(path)
-            .await
-            .context("failed to read the file")?;
+        let content = fs::read_to_string(path).await.context("failed to read the file")?;
         Ok(content.into())
     }
 
@@ -584,4 +581,33 @@ impl PrfItem {
 #[allow(clippy::unnecessary_wraps)]
 const fn default_allow_auto_update() -> Option<bool> {
     Some(true)
+}
+
+/// Fix URLs where query parameters are incorrectly appended to the path segment
+///
+/// Incorrect Example: https://example.com/path&param1=value1
+fn fix_dirty_url(input: &str) -> Result<Url> {
+    let mut url = match Url::parse(input) {
+        Ok(u) => u,
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "failed to parse deep link url: {:?}, input: {:?}",
+                e,
+                input
+            ));
+        }
+    };
+
+    if url.query().is_none() && url.path().contains('&') {
+        let path = url.path().to_string();
+
+        if let Some((clean_path, dirty_params)) = path.split_once('&') {
+            url.set_path(clean_path);
+
+            url.query_pairs_mut()
+                .extend_pairs(form_urlencoded::parse(dirty_params.as_bytes()));
+        }
+    }
+
+    Ok(url)
 }

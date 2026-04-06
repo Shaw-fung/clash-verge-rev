@@ -16,7 +16,8 @@ Una interfaz gráfica para Clash Meta construida con <a href="https://github.com
   <a href="./README_es.md">Español</a> ·
   <a href="./README_ru.md">Русский</a> ·
   <a href="./README_ja.md">日本語</a> ·
-  <a href="./README_ko.md">한국어</a>
+  <a href="./README_ko.md">한국어</a> ·
+  <a href="./README_fa.md">فارسی</a>
 </p>
 
 ## Vista previa
@@ -61,19 +62,6 @@ Consulta la [documentación del proyecto](https://clash-verge-rev.github.io/) pa
 - Primer proveedor global que soporta el protocolo `Hysteria2`, ideal para el cliente Clash Verge
 - Desbloquea servicios de streaming y acceso a ChatGPT
 - Sitio oficial: [https://狗狗加速.com](https://verge.dginv.click/#/register?code=oaxsAGo6)
-
-#### Patrocinador de la infraestructura de compilación — [Servidores dedicados YXVM](https://yxvm.com/aff.php?aff=827)
-
-Las compilaciones y lanzamientos del proyecto se ejecutan en servidores dedicados de YXVM, que proporcionan recursos premium, alto rendimiento y redes de alta velocidad. Si las descargas son rápidas y el uso es fluido, es gracias a este hardware robusto.
-
-🧩 Ventajas de los servidores dedicados YXVM:
-
-- 🌎 Rutas globales optimizadas para descargas significativamente más rápidas
-- 🔧 Recursos bare-metal, en lugar de VPS compartidos, para obtener el máximo rendimiento
-- 🧠 Ideales para proxys, alojamiento de sitios web/CDN, pipelines de CI/CD o cualquier carga elevada
-- 💡 Listos para usar al instante, con múltiples centros de datos disponibles (incluidos CN2 e IEPL)
-- 📦 La misma configuración utilizada por este proyecto está disponible para su compra
-- 🎯 ¿Quieres el mismo entorno de compilación? [Solicita un servidor YXVM hoy](https://yxvm.com/aff.php?aff=827)
 
 ## Funciones
 

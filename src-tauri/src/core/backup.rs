@@ -2,6 +2,7 @@ use crate::constants::files::DNS_CONFIG;
 use crate::{config::Config, process::AsyncHandler, utils::dirs};
 use anyhow::Error;
 use arc_swap::{ArcSwap, ArcSwapOption};
+use backon::{ConstantBuilder, Retryable as _};
 use clash_verge_logging::{Type, logging};
 use once_cell::sync::OnceCell;
 use reqwest_dav::list_cmd::{ListEntity, ListFile};
@@ -52,16 +53,16 @@ impl Operation {
 }
 
 pub struct WebDavClient {
-    config: Arc<ArcSwapOption<WebDavConfig>>,
-    clients: Arc<ArcSwap<HashMap<Operation, reqwest_dav::Client>>>,
+    config: ArcSwapOption<WebDavConfig>,
+    clients: ArcSwap<HashMap<Operation, reqwest_dav::Client>>,
 }
 
 impl WebDavClient {
     pub fn global() -> &'static Self {
         static WEBDAV_CLIENT: OnceCell<WebDavClient> = OnceCell::new();
         WEBDAV_CLIENT.get_or_init(|| Self {
-            config: Arc::new(ArcSwapOption::new(None)),
-            clients: Arc::new(ArcSwap::new(Arc::new(HashMap::new()))),
+            config: ArcSwapOption::new(None),
+            clients: ArcSwap::new(Arc::new(HashMap::new())),
         })
     }
 
@@ -84,10 +85,7 @@ impl WebDavClient {
             } else {
                 // 释放锁后获取异步配置
                 let verge = Config::verge().await.data_arc();
-                if verge.webdav_url.is_none()
-                    || verge.webdav_username.is_none()
-                    || verge.webdav_password.is_none()
-                {
+                if verge.webdav_url.is_none() || verge.webdav_username.is_none() || verge.webdav_password.is_none() {
                     let msg: String =
                         "Unable to create web dav client, please make sure the webdav config is correct".into();
                     return Err(anyhow::Error::msg(msg));
@@ -114,6 +112,7 @@ impl WebDavClient {
         let client = reqwest_dav::ClientBuilder::new()
             .set_agent(
                 reqwest::Client::builder()
+                    .use_rustls_tls()
                     .danger_accept_invalid_certs(true)
                     .timeout(Duration::from_secs(op.timeout()))
                     .user_agent(format!("clash-verge/{APP_VERSION} ({OS} WebDAV-Client)"))
@@ -128,10 +127,7 @@ impl WebDavClient {
                     .build()?,
             )
             .set_host(config.url.into())
-            .set_auth(reqwest_dav::Auth::Basic(
-                config.username.into(),
-                config.password.into(),
-            ))
+            .set_auth(reqwest_dav::Auth::Basic(config.username.into(), config.password.into()))
             .build()?;
 
         // 尝试检查目录是否存在，如果不存在尝试创建
@@ -143,27 +139,20 @@ impl WebDavClient {
             match client.mkcol(dirs::BACKUP_DIR).await {
                 Ok(_) => logging!(info, Type::Backup, "Successfully created backup directory"),
                 Err(e) => {
-                    logging!(
-                        warn,
-                        Type::Backup,
-                        "Warning: Failed to create backup directory: {}",
-                        e
-                    );
+                    logging!(warn, Type::Backup, "Warning: Failed to create backup directory: {}", e);
                     // 清除缓存，强制下次重新尝试
                     self.reset();
-                    return Err(anyhow::Error::msg(format!(
-                        "Failed to create backup directory: {}",
-                        e
-                    )));
+                    return Err(anyhow::Error::msg(format!("Failed to create backup directory: {}", e)));
                 }
             }
         }
 
-        // 缓存客户端（替换 Arc<Mutex<HashMap<...>>> 的写法）
         {
-            let mut map = (**self.clients.load()).clone();
-            map.insert(op, client.clone());
-            self.clients.store(map.into());
+            self.clients.rcu(|clients_map| {
+                let mut new_map = (**clients_map).clone();
+                new_map.insert(op, client.clone());
+                Arc::new(new_map)
+            });
         }
 
         Ok(client)
@@ -178,48 +167,25 @@ impl WebDavClient {
         let client = self.get_client(Operation::Upload).await?;
         let webdav_path: String = format!("{}/{}", dirs::BACKUP_DIR, file_name).into();
 
-        // 读取文件并上传，如果失败尝试一次重试
         let file_content = fs::read(&file_path).await?;
 
-        // 添加超时保护
-        let upload_result = timeout(
-            Duration::from_secs(TIMEOUT_UPLOAD),
-            client.put(&webdav_path, file_content.clone()),
-        )
-        .await;
+        let backoff = ConstantBuilder::default()
+            .with_delay(Duration::from_millis(500))
+            .with_max_times(1);
 
-        match upload_result {
-            Err(_) => {
-                logging!(
-                    warn,
-                    Type::Backup,
-                    "Warning: Upload timed out, retrying once"
-                );
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                timeout(
-                    Duration::from_secs(TIMEOUT_UPLOAD),
-                    client.put(&webdav_path, file_content),
-                )
-                .await??;
-                Ok(())
-            }
-
-            Ok(Err(e)) => {
-                logging!(
-                    warn,
-                    Type::Backup,
-                    "Warning: Upload failed, retrying once: {e}"
-                );
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                timeout(
-                    Duration::from_secs(TIMEOUT_UPLOAD),
-                    client.put(&webdav_path, file_content),
-                )
-                .await??;
-                Ok(())
-            }
-            Ok(Ok(_)) => Ok(()),
-        }
+        (|| async {
+            timeout(
+                Duration::from_secs(TIMEOUT_UPLOAD),
+                client.put(&webdav_path, file_content.clone()),
+            )
+            .await??;
+            Ok::<(), Error>(())
+        })
+        .retry(backoff)
+        .notify(|err, dur| {
+            logging!(warn, Type::Backup, "Upload failed: {err}, retrying in {dur:?}");
+        })
+        .await
     }
 
     pub async fn download(&self, filename: String, storage_path: PathBuf) -> Result<(), Error> {
@@ -242,9 +208,7 @@ impl WebDavClient {
         let path = format!("{}/", dirs::BACKUP_DIR);
 
         let fut = async {
-            let files = client
-                .list(path.as_str(), reqwest_dav::Depth::Number(1))
-                .await?;
+            let files = client.list(path.as_str(), reqwest_dav::Depth::Number(1)).await?;
             let mut final_files = Vec::new();
             for file in files {
                 if let ListEntity::File(file) = file {

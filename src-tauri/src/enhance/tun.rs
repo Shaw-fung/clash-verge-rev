@@ -36,10 +36,7 @@ pub fn use_tun(mut config: Mapping, enable: bool) -> Mapping {
             val.as_mapping().cloned().unwrap_or_else(Mapping::new)
         });
         let ipv6_key = Value::from("ipv6");
-        let ipv6_val = config
-            .get(&ipv6_key)
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let ipv6_val = config.get(&ipv6_key).and_then(|v| v.as_bool()).unwrap_or(false);
 
         // 检查现有的 enhanced-mode 设置
         let current_mode = dns_val
@@ -64,7 +61,7 @@ pub fn use_tun(mut config: Mapping, enable: bool) -> Mapping {
             {
                 AsyncHandler::spawn(move || async move {
                     crate::utils::resolve::dns::restore_public_dns().await;
-                    crate::utils::resolve::dns::set_public_dns("223.6.6.6".to_string()).await;
+                    crate::utils::resolve::dns::set_public_dns("114.114.114.114".to_string()).await;
                 });
             }
         }

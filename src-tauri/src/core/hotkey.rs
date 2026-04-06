@@ -1,6 +1,7 @@
 use crate::process::AsyncHandler;
 use crate::singleton;
 use crate::utils::notification::{NotificationEvent, notify_event};
+use crate::utils::window_manager::WindowManager;
 use crate::{config::Config, core::handle, feat, module::lightweight::entry_lightweight_mode};
 use anyhow::{Result, bail};
 use arc_swap::ArcSwap;
@@ -134,14 +135,14 @@ impl Hotkey {
             }
             HotkeyFunction::ToggleSystemProxy => {
                 AsyncHandler::spawn(async move || {
-                    feat::toggle_system_proxy().await;
-                    notify_event(NotificationEvent::SystemProxyToggled).await;
+                    let is_proxy_enabled = feat::toggle_system_proxy().await;
+                    notify_event(NotificationEvent::SystemProxyToggled(is_proxy_enabled)).await;
                 });
             }
             HotkeyFunction::ToggleTunMode => {
                 AsyncHandler::spawn(async move || {
-                    feat::toggle_tun_mode(None).await;
-                    notify_event(NotificationEvent::TunModeToggled).await;
+                    let is_tun_enable = feat::toggle_tun_mode(None).await;
+                    notify_event(NotificationEvent::TunModeToggled(is_tun_enable)).await;
                 });
             }
             HotkeyFunction::EntryLightweightMode => {
@@ -177,10 +178,7 @@ impl Hotkey {
                             "Failed to reactivate subscriptions via hotkey: {}",
                             err
                         );
-                        handle::Handle::notice_message(
-                            "reactivate_profiles::error",
-                            err.to_string(),
-                        );
+                        handle::Handle::notice_message("reactivate_profiles::error", err.to_string());
                     }
                 });
             }
@@ -205,8 +203,7 @@ impl Hotkey {
     pub async fn register_system_hotkey(&self, hotkey: SystemHotkey) -> Result<()> {
         let hotkey_str = hotkey.to_string();
         let function = hotkey.function();
-        self.register_hotkey_with_function(&hotkey_str, function)
-            .await
+        self.register_hotkey_with_function(&hotkey_str, function).await
     }
 
     #[cfg(target_os = "macos")]
@@ -218,11 +215,7 @@ impl Hotkey {
 
     /// Register a hotkey with function enum
     #[allow(clippy::unused_async)]
-    pub async fn register_hotkey_with_function(
-        &self,
-        hotkey: &str,
-        function: HotkeyFunction,
-    ) -> Result<()> {
+    pub async fn register_hotkey_with_function(&self, hotkey: &str, function: HotkeyFunction) -> Result<()> {
         let app_handle = handle::Handle::app_handle();
         let manager = app_handle.global_shortcut();
 
@@ -251,7 +244,7 @@ impl Hotkey {
                 logging!(debug, Type::Hotkey, "Hotkey pressed: {:?}", hotkey_event);
                 let hotkey = hotkey_event.key;
                 if hotkey == Code::KeyQ && is_quit {
-                    if let Some(window) = handle::Handle::get_window()
+                    if let Some(window) = WindowManager::get_main_window()
                         && window.is_focused().unwrap_or(false)
                     {
                         logging!(debug, Type::Hotkey, "Executing quit function");
@@ -261,18 +254,16 @@ impl Hotkey {
                     AsyncHandler::spawn(move || async move {
                         logging!(debug, Type::Hotkey, "Executing function directly");
 
-                        let is_enable_global_hotkey = Config::verge()
-                            .await
-                            .data_arc()
-                            .enable_global_hotkey
-                            .unwrap_or(true);
+                        let is_enable_global_hotkey =
+                            Config::verge().await.data_arc().enable_global_hotkey.unwrap_or(true);
 
                         if is_enable_global_hotkey {
                             Self::execute_function(function);
                         } else {
                             use crate::utils::window_manager::WindowManager;
-                            let is_visible = WindowManager::is_main_window_visible();
-                            let is_focused = WindowManager::is_main_window_focused();
+                            let window = WindowManager::get_main_window();
+                            let is_visible = WindowManager::is_main_window_visible(window.as_ref());
+                            let is_focused = WindowManager::is_main_window_focused(window.as_ref());
 
                             if is_focused && is_visible {
                                 Self::execute_function(function);
@@ -298,8 +289,12 @@ singleton!(Hotkey, INSTANCE);
 
 impl Hotkey {
     pub async fn init(&self, skip: bool) -> Result<()> {
+        if skip {
+            logging!(debug, Type::Hotkey, "skip register all hotkeys");
+            return Ok(());
+        }
         let verge = Config::verge().await;
-        let enable_global_hotkey = !skip && verge.data_arc().enable_global_hotkey.unwrap_or(true);
+        let enable_global_hotkey = verge.latest_arc().enable_global_hotkey.unwrap_or(true);
 
         logging!(
             debug,
@@ -309,15 +304,10 @@ impl Hotkey {
         );
 
         // Extract hotkeys data before async operations
-        let hotkeys = verge.data_arc().hotkeys.clone();
+        let hotkeys = verge.latest_arc().hotkeys.clone();
 
         if let Some(hotkeys) = hotkeys {
-            logging!(
-                debug,
-                Type::Hotkey,
-                "Has {} hotkeys need to register",
-                hotkeys.len()
-            );
+            logging!(debug, Type::Hotkey, "Has {} hotkeys need to register", hotkeys.len());
 
             for hotkey in hotkeys.iter() {
                 let mut iter = hotkey.split(',');
@@ -326,13 +316,7 @@ impl Hotkey {
 
                 match (key, func) {
                     (Some(key), Some(func)) => {
-                        logging!(
-                            debug,
-                            Type::Hotkey,
-                            "Registering hotkey: {} -> {}",
-                            key,
-                            func
-                        );
+                        logging!(debug, Type::Hotkey, "Registering hotkey: {} -> {}", key, func);
                         if let Err(e) = self.register(key, func).await {
                             logging!(
                                 error,
@@ -465,12 +449,7 @@ impl Drop for Hotkey {
     fn drop(&mut self) {
         let app_handle = handle::Handle::app_handle();
         if let Err(e) = app_handle.global_shortcut().unregister_all() {
-            logging!(
-                error,
-                Type::Hotkey,
-                "Error unregistering all hotkeys: {:?}",
-                e
-            );
+            logging!(error, Type::Hotkey, "Error unregistering all hotkeys: {:?}", e);
         }
     }
 }
